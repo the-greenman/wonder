@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Popup Book — Kirigami Tree</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital@0;1&family=Crimson+Pro:ital,wght@0,300;1,300&display=swap');
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0b0804; overflow:hidden; font-family:'Crimson Pro',serif; }
+  canvas { display:block; cursor:grab; }
+  canvas:active { cursor:grabbing; }
+  #ui {
+    position:fixed; bottom:0; left:0; right:0;
+    padding:20px 36px 24px;
+    display:flex; align-items:center; gap:18px;
+    background:linear-gradient(transparent,rgba(6,4,1,0.92));
+    z-index:10;
+  }
+  #ui label {
+    font-family:'Playfair Display',serif; font-size:11px;
+    letter-spacing:.22em; text-transform:uppercase; color:#c8a96e; white-space:nowrap;
+  }
+  #page-slider {
+    flex:1; -webkit-appearance:none; height:2px;
+    background:linear-gradient(to right,#c8a96e var(--pct,0%),#2a1e0c var(--pct,0%));
+    border-radius:2px; outline:none; cursor:pointer;
+  }
+  #page-slider::-webkit-slider-thumb {
+    -webkit-appearance:none; width:15px; height:15px; border-radius:50%;
+    background:#c8a96e; border:2px solid #0b0804;
+    box-shadow:0 0 8px rgba(200,169,110,.55); cursor:grab;
+  }
+  #alabel { font-size:11px; color:#4e3a18; min-width:34px; text-align:right; }
+  #title {
+    position:fixed; top:20px; left:28px; pointer-events:none;
+    font-family:'Playfair Display',serif; font-size:16px; color:#c8a96e;
+  }
+  #title span {
+    display:block; font-family:'Crimson Pro',serif; font-style:italic;
+    font-size:11px; color:#3e2e10; letter-spacing:.15em; text-transform:uppercase; margin-top:2px;
+  }
+  #hint {
+    position:fixed; top:20px; right:28px; pointer-events:none;
+    font-family:'Crimson Pro',serif; font-style:italic;
+    font-size:12px; color:#3e2e10; transition:opacity 1.4s;
+  }
+</style>
+</head>
+<body>
+<div id="title">Kirigami Tree<span>popup book mechanics</span></div>
+<div id="hint">drag to orbit &nbsp;·&nbsp; slider to open</div>
+<div id="ui">
+  <label>Open</label>
+  <input type="range" id="page-slider" min="2" max="178" value="2" step="0.5">
+  <div id="alabel">2°</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ── Renderer ──────────────────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0804);
+scene.fog = new THREE.FogExp2(0x0b0804, 0.034);
+
+const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.01, 100);
+
+// ── Lighting ──────────────────────────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0xfff4e0, 0.42));
+
+const sun = new THREE.DirectionalLight(0xfff5cc, 1.1);
+sun.position.set(5, 12, 7);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.near   = 0.5;
+sun.shadow.camera.far    = 40;
+sun.shadow.camera.left   = -10;
+sun.shadow.camera.right  =  10;
+sun.shadow.camera.top    =  10;
+sun.shadow.camera.bottom = -10;
+sun.shadow.bias = -0.0008;
+scene.add(sun);
+
+const fill = new THREE.DirectionalLight(0xa0c0ff, 0.2);
+fill.position.set(-6, 5, 3);
+scene.add(fill);
+
+var rimLight = new THREE.DirectionalLight(0xffd080, 0.3);
+rimLight.position.set(0, 3, -9);
+scene.add(rimLight);
+
+// ── Material helper ───────────────────────────────────────────────────────────
+function pm(hex, rough) {
+  rough = rough !== undefined ? rough : 0.88;
+  return new THREE.MeshStandardMaterial({ color: hex, roughness: rough, metalness: 0, side: THREE.DoubleSide });
+}
+
+// ── Book ──────────────────────────────────────────────────────────────────────
+const BW = 5.0, BH = 7.0, BD = 0.04;
+const bookRoot = new THREE.Group();
+scene.add(bookRoot);
+
+// Back cover
+const covBack = new THREE.Mesh(new THREE.BoxGeometry(BW * 2.1, BD * 1.8, BH + 0.3), pm(0x2a1a07, 0.95));
+covBack.rotation.x = -Math.PI / 2;
+covBack.position.y = -BD * 1.1;
+covBack.receiveShadow = true;
+bookRoot.add(covBack);
+
+var covIn = new THREE.Mesh(new THREE.BoxGeometry(BW * 2.06, BD * 0.5, BH + 0.05), pm(0x4a3215, 0.9));
+covIn.rotation.x = -Math.PI / 2;
+covIn.position.y = -BD * 0.4;
+bookRoot.add(covIn);
+
+// Page groups pivot around spine (X=0)
+const leftGrp  = new THREE.Group(); bookRoot.add(leftGrp);
+const rightGrp = new THREE.Group(); bookRoot.add(rightGrp);
+
+(function() {
+  const lp = new THREE.Mesh(new THREE.BoxGeometry(BW, BD, BH), pm(0xf6eed8));
+  lp.position.x = -BW / 2; lp.receiveShadow = true; leftGrp.add(lp);
+  const rp = new THREE.Mesh(new THREE.BoxGeometry(BW, BD, BH), pm(0xf1e9d0));
+  rp.position.x =  BW / 2; rp.receiveShadow = true; rightGrp.add(rp);
+})();
+
+// Spine strip
+bookRoot.add(new THREE.Mesh(new THREE.BoxGeometry(0.16, BD, BH), pm(0xe8dfc0)));
+
+// Page text lines
+const lineMat = pm(0xcfb484, 0.97);
+function addLines(grp, side) {
+  [-2.1, -1.3, -0.4, 0.5, 1.4, 2.2, 2.8].forEach(function(z) {
+    var wid = BW * 0.52;
+    var m = new THREE.Mesh(new THREE.PlaneGeometry(wid, 0.026), lineMat);
+    m.rotation.x = -Math.PI / 2;
+    m.position.set(side * (BW * 0.5 - wid / 2 - 0.4), BD + 0.001, z);
+    grp.add(m);
+  });
+}
+addLines(leftGrp, -1);
+addLines(rightGrp,  1);
+
+// ── Grass ─────────────────────────────────────────────────────────────────────
+const grassMesh = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.2, 0.02, 48), pm(0x78af4e, 0.9));
+grassMesh.receiveShadow = true;
+bookRoot.add(grassMesh);
+
+// ── Tree group ────────────────────────────────────────────────────────────────
+const treeGrp = new THREE.Group();
+bookRoot.add(treeGrp);
+
+// ── Trunk ─────────────────────────────────────────────────────────────────────
+const TRUNK_H = 2.8;
+var trunkGeo = new THREE.CylinderGeometry(0.15, 0.30, TRUNK_H, 16, 3);
+(function() {
+  var pos = trunkGeo.attributes.position;
+  for (var i = 0; i < pos.count; i++) {
+    var y = pos.getY(i);
+    var tf = (y + TRUNK_H / 2) / TRUNK_H;
+    var bulge = 1 + 0.06 * Math.sin(tf * Math.PI);
+    pos.setX(i, pos.getX(i) * bulge);
+    pos.setZ(i, pos.getZ(i) * bulge);
+  }
+  trunkGeo.computeVertexNormals();
+})();
+const trunkMesh = new THREE.Mesh(trunkGeo, pm(0x6a3c1c, 0.93));
+trunkMesh.castShadow = true;
+trunkMesh.rotation.y = Math.PI / 16;
+treeGrp.add(trunkMesh);
+
+// Root flares
+var flareMeshes = [];
+for (var fi = 0; fi < 4; fi++) {
+  var fang = (fi / 4) * Math.PI * 2 + Math.PI / 8;
+  var flare = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.09, 0.5, 4), pm(0x5a3018, 0.95));
+  var bY = -TRUNK_H / 2 + 0.2;
+  flare.position.set(Math.sin(fang) * 0.22, bY, Math.cos(fang) * 0.22);
+  flare.rotation.z = Math.sin(fang) * 0.4;
+  flare.rotation.x = Math.cos(fang) * 0.4;
+  flare.castShadow = true;
+  flare.userData.baseY = bY;
+  flareMeshes.push(flare);
+  treeGrp.add(flare);
+}
+
+// ── Branches ──────────────────────────────────────────────────────────────────
+// [polar, azimuth, heightFraction, length, rTop, rBase]
+var BDEFS = [
+  [0.65,  0.30,          0.80, 1.10, 0.052, 0.095],
+  [0.60,  Math.PI-0.20,  0.77, 1.05, 0.048, 0.090],
+  [0.48,  1.85,          0.88, 0.85, 0.038, 0.072],
+  [0.72,  0.85,          0.66, 0.72, 0.033, 0.062],
+  [0.58, -0.75,          0.70, 0.78, 0.031, 0.058],
+  [0.50,  0.08,          0.93, 0.62, 0.027, 0.050],
+  [0.46,  Math.PI+0.18,  0.91, 0.60, 0.025, 0.048],
+  [0.80,  2.60,          0.60, 0.60, 0.028, 0.052],
+];
+
+var branchPivots = BDEFS.map(function(d) {
+  var polar = d[0], az = d[1], hFrac = d[2], len = d[3], rT = d[4], rB = d[5];
+  var geo = new THREE.CylinderGeometry(rT, rB, len, 7, 1);
+  var mesh = new THREE.Mesh(geo, pm(0x7a4520, 0.92));
+  mesh.castShadow = true;
+  mesh.position.y = len / 2;
+
+  var pivot = new THREE.Group();
+  pivot.add(mesh);
+  pivot.rotation.order = 'YXZ';
+  pivot.rotation.y = az;
+  pivot.rotation.x = polar;
+  var trR = THREE.MathUtils.lerp(0.30, 0.15, hFrac);
+  pivot.position.set(Math.sin(az) * trR * 0.7, 0, Math.cos(az) * trR * 0.7);
+  pivot.userData = { hFrac: hFrac, len: len, mesh: mesh };
+  treeGrp.add(pivot);
+  return pivot;
+});
+
+// ── Foliage ───────────────────────────────────────────────────────────────────
+var TOP = TRUNK_H * 0.95;
+var FDEFS = [
+  [ 0.00, TOP+0.65,  0.00, 1.08, 0x3d7a2e],
+  [ 0.72, TOP+0.15,  0.45, 0.78, 0x4d9040],
+  [-0.78, TOP+0.10,  0.25, 0.80, 0x3a7030],
+  [ 0.28, TOP+0.78, -0.50, 0.70, 0x2d6220],
+  [-0.32, TOP+0.72,  0.52, 0.68, 0x4a8a38],
+  [ 0.05, TOP+0.38, -0.62, 0.62, 0x5aa848],
+  [ 0.95, TOP-0.40,  0.62, 0.54, 0x45883a],
+  [-0.95, TOP-0.45,  0.32, 0.52, 0x3a7830],
+  [ 0.42, TOP-0.28, -0.82, 0.50, 0x2d6225],
+  [-0.42, TOP-0.38, -0.72, 0.48, 0x55a045],
+  [ 0.00, TOP+1.00,  0.15, 0.55, 0x62b850],
+  [ 0.50, TOP+0.52,  0.60, 0.46, 0x509040],
+  [-0.55, TOP+0.48, -0.45, 0.44, 0x3d7832],
+];
+
+var foliageMeshes = FDEFS.map(function(d, idx) {
+  var x = d[0], y = d[1], z = d[2], r = d[3], col = d[4];
+  var geo = new THREE.IcosahedronGeometry(r, 2);
+  var pos = geo.attributes.position;
+  var seed = x * 100 + z * 37 + idx * 13;
+  for (var i = 0; i < pos.count; i++) {
+    var n = 0.86 + 0.28 * Math.abs(Math.sin(i * 2.3 + seed));
+    var ny = 0.82 + 0.22 * Math.abs(Math.sin(i * 1.7 + seed));
+    pos.setXYZ(i, pos.getX(i) * n, pos.getY(i) * ny, pos.getZ(i) * n);
+  }
+  geo.computeVertexNormals();
+  var mesh = new THREE.Mesh(geo, pm(col, 0.87));
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.userData.base = new THREE.Vector3(x, y, z);
+  treeGrp.add(mesh);
+  return mesh;
+});
+
+// ── Table ─────────────────────────────────────────────────────────────────────
+var tbl = new THREE.Mesh(new THREE.PlaneGeometry(60, 60),
+  new THREE.MeshStandardMaterial({ color: 0x080602, roughness: 0.98 }));
+tbl.rotation.x = -Math.PI / 2;
+tbl.position.y = -BD * 2.5;
+tbl.receiveShadow = true;
+scene.add(tbl);
+
+// ── Orbit ─────────────────────────────────────────────────────────────────────
+var orbitAz = 0.1, orbitPolar = 0.50;
+var ORBIT_R = 16, dragging = false, lx = 0, ly = 0;
+
+function updateCamera() {
+  var p = Math.max(0.08, Math.min(1.45, orbitPolar));
+  camera.position.set(
+    ORBIT_R * Math.cos(p) * Math.sin(orbitAz),
+    ORBIT_R * Math.sin(p),
+    ORBIT_R * Math.cos(p) * Math.cos(orbitAz)
+  );
+  camera.lookAt(0, 2.0, 0);
+}
+
+var cvs = renderer.domElement;
+cvs.addEventListener('mousedown',  function(e) { dragging = true;  lx = e.clientX; ly = e.clientY; });
+window.addEventListener('mouseup', function()  { dragging = false; });
+window.addEventListener('mousemove', function(e) {
+  if (!dragging) return;
+  orbitAz    -= (e.clientX - lx) * 0.007;
+  orbitPolar += (e.clientY - ly) * 0.005;
+  lx = e.clientX; ly = e.clientY;
+  updateCamera();
+});
+cvs.addEventListener('touchstart', function(e) {
+  dragging = true; lx = e.touches[0].clientX; ly = e.touches[0].clientY;
+}, { passive: true });
+window.addEventListener('touchend', function() { dragging = false; });
+window.addEventListener('touchmove', function(e) {
+  if (!dragging) return;
+  orbitAz    -= (e.touches[0].clientX - lx) * 0.007;
+  orbitPolar += (e.touches[0].clientY - ly) * 0.005;
+  lx = e.touches[0].clientX; ly = e.touches[0].clientY;
+  updateCamera();
+}, { passive: true });
+
+// ── Slider ────────────────────────────────────────────────────────────────────
+var slider     = document.getElementById('page-slider');
+var alabel     = document.getElementById('alabel');
+var hint       = document.getElementById('hint');
+var pageAngle  = 2, hintFaded = false;
+
+slider.addEventListener('input', function() {
+  pageAngle = parseFloat(slider.value);
+  slider.style.setProperty('--pct', ((pageAngle - 2) / 176 * 100) + '%');
+  alabel.textContent = Math.round(pageAngle) + '°';
+  if (!hintFaded) { hint.style.opacity = '0'; hintFaded = true; }
+});
+
+// ── Update ────────────────────────────────────────────────────────────────────
+function ss(x) { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); }
+
+function updateBook(deg) {
+  var t = (deg - 2) / 176;
+  bookRoot.rotation.x = -0.22;
+
+  var openAngle = (Math.PI / 2) * t;
+  leftGrp.rotation.z  =  (Math.PI / 2) - openAngle;
+  rightGrp.rotation.z = -((Math.PI / 2) - openAngle);
+
+  var rise   = Math.sin(openAngle);
+  var smooth = ss(rise);
+
+  // Grass
+  grassMesh.position.y = smooth * 0.015;
+  grassMesh.scale.setScalar(Math.max(0.001, 0.1 + smooth * 0.9));
+
+  // Trunk
+  trunkMesh.scale.y    = Math.max(0.001, smooth);
+  trunkMesh.position.y = (TRUNK_H / 2) * smooth;
+
+  // Flares
+  flareMeshes.forEach(function(f) {
+    f.scale.y    = Math.max(0.001, smooth);
+    f.position.y = f.userData.baseY * smooth;
+  });
+
+  // Branches
+  branchPivots.forEach(function(pivot) {
+    var hFrac = pivot.userData.hFrac;
+    var len   = pivot.userData.len;
+    var mesh  = pivot.userData.mesh;
+    var delay = 0.32 + hFrac * 0.28;
+    var bT    = ss(Math.max(0, (rise - delay) / (1 - delay)));
+    mesh.scale.y    = Math.max(0.001, bT);
+    mesh.position.y = len / 2 * bT;
+    pivot.position.y = (TRUNK_H * hFrac - TRUNK_H / 2) * smooth;
+    pivot.visible    = smooth > 0.04;
+  });
+
+  // Foliage
+  foliageMeshes.forEach(function(mesh, i) {
+    var base  = mesh.userData.base;
+    var delay = 0.50 + (i % 5) * 0.04;
+    var fT    = ss(Math.max(0, (rise - delay) / (1 - delay)));
+    mesh.position.set(base.x * fT, base.y * smooth * (0.3 + fT * 0.7), base.z * fT);
+    var sc = Math.max(0.001, fT * (0.4 + smooth * 0.6));
+    mesh.scale.setScalar(sc);
+    mesh.rotation.y = (1 - fT) * Math.PI * 0.5 + i * 0.28;
+    mesh.visible = fT > 0.01;
+  });
+
+  // Letters: hinge from flat (lying on page) to upright
+  if (typeof letterPivots !== 'undefined') {
+    letterPivots.forEach(function(pivot, i) {
+      var delay = 0.18 + i * 0.04;
+      var lT = ss(Math.max(0, (rise - delay) / (1 - delay)));
+      pivot.rotation.x = -Math.PI / 2 * (1 - lT);
+      pivot.visible = rise > Math.max(0, delay - 0.02);
+    });
+  }
+}
+
+// ── "Wonder" popup text ───────────────────────────────────────────────────────
+// Each letter is an ExtrudeGeometry from a hand-drawn Shape path.
+// Letters hinge from their base (Z = their front edge on the page),
+// rotating from flat (on the page) to upright as the book opens.
+// The whole word sits in front of the tree, centred on the spine.
+
+var TEXT_MAT    = pm(0xf0e0c0, 0.82); // warm cream paper
+var TEXT_MAT_SIDE = new THREE.MeshStandardMaterial({ color: 0xc8a060, roughness: 0.88, metalness: 0, side: THREE.DoubleSide });
+
+var LETTER_H    = 0.85;   // height of each letter
+var LETTER_D    = 0.055;  // extrude depth (thickness)
+var LETTER_GAP  = 0.10;   // gap between letters
+var TEXT_Z      = 2.6;    // how far in front of spine (page Z)
+var TEXT_DELAY  = 0.18;   // rise delay after pages start opening
+
+// Build letter shapes — each returns a THREE.Shape for that character
+// Co-ordinates are in a 0→1 x 0→1 box, scaled to LETTER_H
+function scaleShape(shape, w, h) {
+  // shapes are authored in a unit box; scale to real size
+  var pts = shape.getPoints(12);
+  // we just return the shape; scaling is done via extrude settings + mesh.scale
+  return shape;
+}
+
+function makeLetterShapes(ch) {
+  var s = new THREE.Shape();
+  var t = 0.18; // stroke thickness relative to unit box
+  switch(ch) {
+    case 'W': {
+      // Outer M silhouette of a bold W
+      s.moveTo(0,   1);
+      s.lineTo(0.1, 1);
+      s.lineTo(0.28,0.32);
+      s.lineTo(0.46,0.80);
+      s.lineTo(0.54,0.80);
+      s.lineTo(0.72,0.32);
+      s.lineTo(0.90,1);
+      s.lineTo(1.0, 1);
+      s.lineTo(0.82,0);
+      s.lineTo(0.66,0);
+      s.lineTo(0.50,0.50);
+      s.lineTo(0.34,0);
+      s.lineTo(0.18,0);
+      s.closePath();
+      return [s];
+    }
+    case 'o': {
+      // Bold O — outer ring with hole
+      var outer = new THREE.Shape();
+      var r = 0.50, cx = 0.50, cy = 0.50;
+      outer.absarc(cx, cy, r, 0, Math.PI*2, false);
+      var hole = new THREE.Path();
+      hole.absarc(cx, cy, r - t*1.1, 0, Math.PI*2, true);
+      outer.holes.push(hole);
+      return [outer];
+    }
+    case 'n': {
+      var sh = new THREE.Shape();
+      // Left stem
+      sh.moveTo(0,    0);
+      sh.lineTo(t,    0);
+      sh.lineTo(t,    0.72);
+      // arch over to right stem
+      sh.bezierCurveTo(t, 0.95, 1-t, 0.95, 1-t, 0.72);
+      sh.lineTo(1,    0.72);
+      sh.lineTo(1,    0);
+      sh.lineTo(1-t,  0);
+      sh.lineTo(1-t,  0.65);
+      sh.bezierCurveTo(1-t, 0.78, t, 0.78, t, 0.65);
+      sh.lineTo(t*0.0, 0.65);  // back down left inner
+      sh.lineTo(0,    0);
+      sh.closePath();
+      return [sh];
+    }
+    case 'd': {
+      // Stem on RIGHT, bowl opens to the LEFT
+      var ds = new THREE.Shape();
+      // Full right stem
+      ds.moveTo(1-t, 0); ds.lineTo(1.0, 0); ds.lineTo(1.0, 1); ds.lineTo(1-t, 1); ds.closePath();
+      // Bowl — centred at x=0.46, opens left
+      var bowl = new THREE.Shape();
+      bowl.absarc(0.46, 0.38, 0.46, -Math.PI*0.5, Math.PI*1.5, false);
+      var bHole = new THREE.Path();
+      bHole.absarc(0.46, 0.38, 0.46 - t*1.05, -Math.PI*0.5, Math.PI*1.5, true);
+      bowl.holes.push(bHole);
+      // Join bowl to stem top & bottom
+      var topBar = new THREE.Shape();
+      topBar.moveTo(0.46, 0.76); topBar.lineTo(1-t, 0.76);
+      topBar.lineTo(1-t, 0.84); topBar.lineTo(0.46, 0.84); topBar.closePath();
+      var botBar = new THREE.Shape();
+      botBar.moveTo(0.46, -0.08); botBar.lineTo(1-t, -0.08);
+      botBar.lineTo(1-t, 0.0);   botBar.lineTo(0.46, 0.0); botBar.closePath();
+      return [ds, bowl, topBar, botBar];
+    }
+    case 'e': {
+      var es = new THREE.Shape();
+      // Outer arc (open right)
+      es.absarc(0.46, 0.38, 0.46, Math.PI*0.15, Math.PI*1.85, false);
+      es.lineTo(0.0, 0.30);
+      es.closePath();
+      var eHole = new THREE.Path();
+      eHole.absarc(0.46, 0.38, 0.46 - t*1.05, Math.PI*0.28, Math.PI*1.72, true);
+      es.holes.push(eHole);
+      // Crossbar
+      var bar = new THREE.Shape();
+      bar.moveTo(0.00, 0.34); bar.lineTo(0.92, 0.34);
+      bar.lineTo(0.92, 0.44); bar.lineTo(0.00, 0.44); bar.closePath();
+      return [es, bar];
+    }
+    case 'r': {
+      var rs = new THREE.Shape();
+      // Stem
+      rs.moveTo(0, 0); rs.lineTo(t, 0); rs.lineTo(t, 1); rs.lineTo(0, 1); rs.closePath();
+      // Bump top right
+      var bump = new THREE.Shape();
+      bump.moveTo(t, 0.62);
+      bump.bezierCurveTo(t, 0.92, 1.0, 0.92, 1.0, 0.62);
+      bump.lineTo(1-t, 0.62);
+      bump.bezierCurveTo(1-t, 0.80, t*2, 0.80, t*2, 0.62);
+      bump.closePath();
+      return [rs, bump];
+    }
+    default: return [];
+  }
+}
+
+// Letter widths (relative units, matching the shapes above)
+var LETTER_WIDTHS = { 'W':1.0, 'o':1.0, 'n':1.0, 'd':1.0, 'e':0.92, 'r':0.80 };
+var WORD = ['W','o','n','d','e','r'];
+
+// Compute total word width to centre it
+var totalW = 0;
+WORD.forEach(function(ch) { totalW += (LETTER_WIDTHS[ch] || 1.0) * LETTER_H + LETTER_GAP; });
+totalW -= LETTER_GAP;
+
+var extrudeSettings = {
+  depth: LETTER_D,
+  bevelEnabled: true,
+  bevelThickness: 0.008,
+  bevelSize: 0.008,
+  bevelSegments: 2,
+};
+
+// Each letter gets a pivot group at its base edge so it can hinge from flat→upright
+var letterPivots = [];
+var curX = -totalW / 2;
+
+WORD.forEach(function(ch, idx) {
+  var lw = (LETTER_WIDTHS[ch] || 1.0) * LETTER_H;
+  var shapes = makeLetterShapes(ch);
+  if (!shapes.length) { curX += lw + LETTER_GAP; return; }
+
+  var pivot = new THREE.Group();
+  // Pivot sits at the base of the letter on the page surface
+  // Z is TEXT_Z (forward from spine), X is letter centre
+  pivot.position.set(curX + lw / 2, 0, TEXT_Z);
+  bookRoot.add(pivot);
+
+  shapes.forEach(function(shape) {
+    var geo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+    // Centre and scale the geometry: shapes authored in 0-1 box
+    geo.translate(-0.5, 0, -LETTER_D / 2); // centre X around 0, depth centred
+    geo.scale(lw, LETTER_H, 1);
+
+    var mat = [TEXT_MAT, TEXT_MAT_SIDE];
+    var mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    pivot.add(mesh);
+  });
+
+  pivot.userData.letterIdx = idx;
+  letterPivots.push(pivot);
+  curX += lw + LETTER_GAP;
+});
+
+// ── Loop ──────────────────────────────────────────────────────────────────────
+updateCamera();
+function animate() {
+  requestAnimationFrame(animate);
+  updateBook(pageAngle);
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', function() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
