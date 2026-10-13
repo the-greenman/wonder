@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pop-up Tree</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital@0;1&family=Crimson+Pro:ital,wght@0,400;1,400&display=swap">
+<link rel="stylesheet" href="lib/popup-stage.css">
+</head>
+<body>
+<div id="title"><h1>The Pop-up Tree</h1><p>layered V-folds · rigid-card mechanics</p></div>
+<div id="hint">drag to look around · scroll to zoom</div>
+<div id="ui">
+  <button id="toggle">Open the book</button>
+  <input id="angle" type="range" min="0" max="180" step="0.5" value="0" aria-label="Opening angle">
+  <div id="readout">closed</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="lib/popup.js"></script>
+<script src="lib/popup-three.js"></script>
+<script src="lib/popup-stage.js"></script>
+<script src="designs/tree.js"></script>
+<script>
+'use strict';
+const T = PopupThree.text;
+const rng = PopupStage.rng;
+
+// ── Paint: each layer half is drawn in (s, v) — s is the distance from the
+// centre crease, v the height — so both halves share one drawing. ──────────
+function inSilhouette(ctx, b, draw) {
+  const info = b.panel.info;
+  ctx.save();
+  if (b.panel.side === 'left') { // the left outline starts at the glue end
+    ctx.translate(info.half[1][0], 0);
+    ctx.scale(-1, 1);
+  }
+  draw(info.recipe, info.half, rng(b.panel.side === 'left' ? 11 : 29));
+  ctx.restore();
+}
+
+function crownPath(ctx, half) {
+  ctx.beginPath();
+  ctx.moveTo(0, half[2][1]);
+  for (let i = 2; i < half.length; i++) ctx.lineTo(half[i][0], half[i][1]);
+  ctx.closePath();
+}
+
+function trunk(ctx, L, r, bark) {
+  const top = L.crownBottom + 0.35;
+  ctx.fillStyle = bark || '#7a5232';
+  ctx.beginPath();
+  ctx.moveTo(-0.05, 0); ctx.lineTo(L.trunkBase, 0); ctx.lineTo(L.trunkTop, top); ctx.lineTo(-0.05, top);
+  ctx.fill();
+  // bark: wavy vertical strokes
+  ctx.strokeStyle = 'rgba(50,30,15,.45)'; ctx.lineWidth = 0.014;
+  for (let i = 0; i < 6; i++) {
+    const s0 = (i + 0.5) / 6 * L.trunkBase * 0.95;
+    ctx.beginPath(); ctx.moveTo(s0, 0);
+    for (let v = 0; v <= top; v += 0.08) ctx.lineTo(s0 * (1 - v / top * 0.45) + Math.sin(v * 9 + i) * 0.012, v);
+    ctx.stroke();
+  }
+  // a branch reaching into the crown
+  ctx.strokeStyle = '#6b4529'; ctx.lineWidth = 0.05; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(L.trunkTop * 0.5, L.crownBottom); ctx.quadraticCurveTo(L.crownWidth * 0.35, L.crownBottom + 0.1, L.crownWidth * 0.55, L.crownBottom + 0.45); ctx.stroke();
+}
+
+function foliage(ctx, L, half, r, palette, extras) {
+  crownPath(ctx, half);
+  ctx.fillStyle = palette[0];
+  ctx.fill();
+  ctx.save();
+  crownPath(ctx, half);
+  ctx.clip();
+  // clusters of leaves, darker towards the crease and the bottom
+  for (let i = 0; i < 260; i++) {
+    const s = r() * L.crownWidth * 1.15, v = L.crownBottom + r() * (L.crownTop - L.crownBottom) * 1.05;
+    const shade = s / L.crownWidth * 0.6 + (v - L.crownBottom) / (L.crownTop - L.crownBottom) * 0.4;
+    ctx.fillStyle = palette[shade > 0.62 ? 2 : shade > 0.35 ? 1 : 3];
+    ctx.beginPath(); ctx.ellipse(s, v, 0.07 + r() * 0.05, 0.045 + r() * 0.03, r() * 3, 0, Math.PI * 2); ctx.fill();
+  }
+  // a darker shadow at the foot of the crown
+  const g = ctx.createLinearGradient(0, L.crownBottom, 0, L.crownBottom + 0.5);
+  g.addColorStop(0, 'rgba(20,45,15,.45)'); g.addColorStop(1, 'rgba(20,45,15,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, L.crownBottom - 0.2, L.crownWidth * 1.3, 0.7);
+  if (extras) extras(r);
+  ctx.restore();
+  // a crisp cut edge
+  crownPath(ctx, half);
+  ctx.strokeStyle = 'rgba(25,50,20,.55)'; ctx.lineWidth = 0.02; ctx.stroke();
+}
+
+function apples(ctx, L, r) {
+  for (let i = 0; i < 9; i++) {
+    const s = 0.15 + r() * L.crownWidth * 0.75, v = L.crownBottom + 0.35 + r() * (L.crownTop - L.crownBottom) * 0.6;
+    ctx.fillStyle = '#c8362b'; ctx.beginPath(); ctx.arc(s, v, 0.065, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.55)'; ctx.beginPath(); ctx.arc(s - 0.02, v + 0.022, 0.018, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+function layerStyle(palette, opts) {
+  opts = opts || {};
+  return {
+    color: palette[0],
+    back: opts.back || '#4b6e3a',
+    paint(ctx, b) {
+      inSilhouette(ctx, b, (L, half, r) => {
+        trunk(ctx, L, r, opts.bark);
+        foliage(ctx, L, half, r, palette, opts.apples ? () => apples(ctx, L, r) : null);
+        if (opts.bird && b.panel.side === 'right') bird(ctx, L.crownWidth * 0.55, L.crownTop - 0.55);
+      });
+    },
+  };
+}
+
+function bird(ctx, s, v) {
+  ctx.fillStyle = '#3d5a8a';
+  ctx.beginPath(); ctx.ellipse(s, v, 0.14, 0.09, 0.2, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(s + 0.12, v + 0.07, 0.06, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#f2a33a'; ctx.beginPath(); ctx.moveTo(s + 0.17, v + 0.08); ctx.lineTo(s + 0.25, v + 0.06); ctx.lineTo(s + 0.17, v + 0.04); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(s + 0.13, v + 0.09, 0.016, 0, Math.PI * 2); ctx.fill();
+}
+
+const styles = {
+  back: layerStyle(['#2f6a35', '#3b7a3e', '#4a8a46', '#25562b'], { back: '#2c4f2a', bark: '#4a3220' }),
+  middle: layerStyle(['#4d8a3f', '#5c9a48', '#6cab52', '#3b7333'], { apples: true, bird: true, back: '#3f6331', bark: '#5c3d25' }),
+  front: layerStyle(['#6aa64c', '#79b558', '#8cc463', '#558c3e'], { back: '#557a3e' }),
+  grass: {
+    color: '#6aa848', back: '#557a3e',
+    paint(ctx, b) {
+      inSilhouette(ctx, b, (L, half, r) => {
+        const g = ctx.createLinearGradient(0, 0, 0, L.height);
+        g.addColorStop(0, '#4f8a38'); g.addColorStop(1, '#86c45c');
+        ctx.fillStyle = g; ctx.fillRect(-0.1, -0.1, L.width + 0.2, L.height + 0.2);
+        ctx.strokeStyle = 'rgba(40,80,25,.6)'; ctx.lineWidth = 0.014;
+        for (let i = 0; i < 90; i++) {
+          const s = r() * L.width, v = r() * L.height * 0.6;
+          ctx.beginPath(); ctx.moveTo(s, v); ctx.lineTo(s + (r() - 0.5) * 0.06, v + 0.12 + r() * 0.1); ctx.stroke();
+        }
+        const petals = ['#f6d4e0', '#fff4c2', '#ffffff', '#f3a6a0'];
+        for (let i = 0; i < 16; i++) {
+          ctx.fillStyle = petals[i % petals.length];
+          ctx.beginPath(); ctx.arc(r() * L.width, 0.08 + r() * L.height * 0.5, 0.03, 0, Math.PI * 2); ctx.fill();
+        }
+      });
+    },
+  },
+};
+
+function paintSpread(ctx, b) {
+  const W = b.maxU - b.minU, H = b.maxV - b.minV;
+  const g = ctx.createLinearGradient(0, b.minV, 0, b.maxV);
+  g.addColorStop(0, '#84b257'); g.addColorStop(1, '#689a45');
+  ctx.fillStyle = g; ctx.fillRect(b.minU, b.minV, W, H);
+  ctx.strokeStyle = 'rgba(243,234,210,.85)'; ctx.lineWidth = 0.22;
+  ctx.strokeRect(b.minU + 0.11, b.minV + 0.11, W - 0.22, H - 0.22);
+  const r = rng(5);
+  ctx.strokeStyle = 'rgba(60,110,40,.55)'; ctx.lineWidth = 0.014;
+  for (let i = 0; i < 520; i++) {
+    const u = b.minU + 0.3 + r() * (W - 0.6), v = b.minV + 0.3 + r() * (H - 0.6);
+    ctx.beginPath(); ctx.moveTo(u, v); ctx.lineTo(u - 0.03, v + 0.07); ctx.moveTo(u, v); ctx.lineTo(u + 0.03, v + 0.07); ctx.stroke();
+  }
+  // the tree's shade on the grass (v = -z, the tree stands at z -1..2)
+  const sh = ctx.createRadialGradient(-0.4, 0.1, 0.2, -0.4, 0.1, 2.6);
+  sh.addColorStop(0, 'rgba(30,60,20,.28)'); sh.addColorStop(1, 'rgba(30,60,20,0)');
+  ctx.fillStyle = sh; ctx.fillRect(-3.2, -2.6, 5.6, 5.4);
+  // fallen apples and flowers
+  [[0.9, -1.2], [-1.3, -0.6], [1.6, -0.2], [-0.7, -2.4]].forEach(([u, v]) => {
+    ctx.fillStyle = '#c8362b'; ctx.beginPath(); ctx.arc(u, v, 0.07, 0, Math.PI * 2); ctx.fill();
+  });
+  const petals = ['#f6d4e0', '#fff4c2', '#f3a6a0', '#c9d8ff', '#ffffff'];
+  for (let i = 0; i < 150; i++) {
+    const u = b.minU + 0.35 + r() * (W - 0.7), v = b.minV + 0.35 + r() * (H - 0.7);
+    if (Math.abs(u) < 1.6 && v > -2.4 && v < 1.4) continue;
+    ctx.fillStyle = petals[i % petals.length];
+    ctx.beginPath(); ctx.arc(u, v, 0.035 + r() * 0.02, 0, Math.PI * 2); ctx.fill();
+  }
+  T(ctx, 'Under the apple tree', -2.5, -2.9, 0.34, { color: 'rgba(45,70,30,.8)', family: '"Playfair Display", Georgia, serif', style: 'italic' });
+}
+
+function paintCover(ctx, b) {
+  const W = b.maxU, H = b.maxV;
+  ctx.strokeStyle = '#d8b06a'; ctx.lineWidth = 0.04;
+  ctx.strokeRect(0.3, 0.3, W - 0.6, H - 0.6);
+  ctx.lineWidth = 0.015; ctx.strokeRect(0.42, 0.42, W - 0.84, H - 0.84);
+  T(ctx, 'The Pop-up', W / 2, H * 0.66, 0.55, { color: '#e2c27f', family: '"Playfair Display", Georgia, serif', style: 'italic' });
+  T(ctx, 'Tree', W / 2, H * 0.66 - 0.8, 0.8, { color: '#e2c27f', family: '"Playfair Display", Georgia, serif' });
+  // a gold tree outline
+  const cx = W / 2, cy = H * 0.3;
+  ctx.strokeStyle = '#d8b06a'; ctx.lineWidth = 0.035;
+  ctx.beginPath(); ctx.arc(cx, cy + 0.35, 0.55, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx - 0.08, cy - 0.6); ctx.lineTo(cx - 0.05, cy - 0.2); ctx.moveTo(cx + 0.08, cy - 0.6); ctx.lineTo(cx + 0.05, cy - 0.2); ctx.stroke();
+}
+
+PopupStage.mount({
+  design: PopupTree.buildTree(Popup, { styles }),
+  paintSpread,
+  paintCover,
+  coverColor: '#2f4a2a',
+  lookHeight: 1.3,
+  fonts: ['italic 100px "Playfair Display"', '100px "Playfair Display"'],
+});
+</script>
+</body>
+</html>
