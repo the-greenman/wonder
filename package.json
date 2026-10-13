@@ -1,0 +1,8 @@
+{
+  "name": "wonder",
+  "private": true,
+  "description": "Pop-up book mechanics",
+  "scripts": {
+    "test": "node test/popup.test.js"
+  }
+}
