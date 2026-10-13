@@ -1,0 +1,33 @@
+:root {
+  --bg: #14100a;
+  --ink: #e9d5a8;
+  --muted: #8a7550;
+  --track: #3a2c16;
+  --accent: #d8b06a;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+body { background: var(--bg); overflow: hidden; font-family: 'Crimson Pro', Georgia, serif; color: var(--ink); }
+canvas { display: block; cursor: grab; touch-action: none; }
+canvas:active { cursor: grabbing; }
+#title { position: fixed; top: 18px; left: 22px; pointer-events: none; }
+#title h1 { font-family: 'Playfair Display', Georgia, serif; font-weight: 400; font-size: 20px; }
+#title p { font-style: italic; font-size: 13px; color: var(--muted); letter-spacing: .08em; }
+#ui {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  padding: 18px 22px 22px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  background: linear-gradient(transparent, rgba(10, 7, 3, .9));
+}
+button {
+  font: inherit; font-family: 'Playfair Display', Georgia, serif; font-size: 15px;
+  color: var(--bg); background: var(--accent); border: 0; border-radius: 999px;
+  padding: 9px 22px; cursor: pointer; min-width: 150px;
+}
+button:hover { filter: brightness(1.08); }
+#angle { flex: 1; min-width: 160px; accent-color: var(--accent); }
+#readout { font-size: 13px; color: var(--muted); min-width: 170px; text-align: right; font-variant-numeric: tabular-nums; }
+#hint { position: fixed; top: 20px; right: 22px; font-style: italic; font-size: 13px; color: var(--muted); pointer-events: none; text-align: right; }
+@media (max-width: 560px) {
+  #hint { display: none; }
+  #readout { text-align: left; min-width: 0; }
+}

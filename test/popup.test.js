@@ -3,6 +3,7 @@
 const assert = require('assert');
 const Popup = require('../lib/popup.js');
 const { buildHouse } = require('../designs/house.js');
+const { buildTree } = require('../designs/tree.js');
 
 const DEG = Math.PI / 180;
 let failures = 0;
@@ -16,8 +17,11 @@ function test(name, fn) {
   }
 }
 
+// Every point of the paper that is not glued down (hinges and outline alike).
 function freeIds(sim) {
-  return sim.free.map((f, i) => (f ? i : -1)).filter((i) => i >= 0);
+  const ids = new Set();
+  sim.panels.forEach((pp) => pp.ids.forEach((id) => { if (!sim.glue[id]) ids.add(id); }));
+  return Array.from(ids);
 }
 
 // Signed distance of a point from each page's printed side (>= 0 inside the book).
@@ -135,6 +139,49 @@ test('strain flags a design that cannot fold rigidly', () => {
   const sim = new Popup.Simulation(d);
   sim.setAngle(120 * DEG);
   assert(sim.strain().value > 0.02, 'expected visible strain, got ' + sim.strain().value);
+});
+
+test('tree: layered V-folds fold flat rigidly, inside the book, and reopen', () => {
+  const d = buildTree(Popup);
+  const sim = new Popup.Simulation(d);
+  // Only hinge points are solved; the crown outlines ride along rigidly.
+  assert(sim.nVars <= 3 * d.meta.layers.length, 'solved unknowns: ' + sim.nVars);
+  let worst = 0;
+  for (let a = 180; a >= 1; a -= 0.5) {
+    sim.setAngle(a * DEG);
+    worst = Math.max(worst, sim.strain().value);
+    assert(sim.outside().value < 1e-9, 'paper through a page at ' + a + '°: ' + JSON.stringify(sim.outside()));
+  }
+  assert(worst < 1e-9, 'paper strain ' + worst);
+  sim.setAngle(sim.minAngle);
+  freeIds(sim).forEach((i) => {
+    const p = sim.get(i);
+    assert(p[1] < 0.05 && p[0] <= d.pageWidth && Math.abs(p[2]) <= d.pageHeight / 2, 'closed flat inside the page: ' + p);
+  });
+  sim.setAngle(Math.PI);
+  let err = 0;
+  d.points.forEach((pt, i) => (err = Math.max(err, Popup.vec.len(Popup.vec.sub(sim.get(i), pt.pos)))));
+  assert(err < 1e-6, 'reopened tree matches the design, max error ' + err);
+});
+
+test('tree: layers stay parallel, so they never cut through each other', () => {
+  const d = buildTree(Popup);
+  const sim = new Popup.Simulation(d);
+  const normalOf = (name) => {
+    const p = d.panels.find((q) => q.name === name);
+    return Popup.panelFrame(p.outline.map((id) => sim.get(id))).n;
+  };
+  const names = d.meta.layers.map((l) => l.name);
+  for (const a of [150, 100, 45, 10]) {
+    sim.setAngle(a * DEG);
+    for (const side of ['left', 'right']) {
+      const n0 = normalOf(names[0] + '-' + side);
+      names.slice(1).forEach((nm) => {
+        const n = normalOf(nm + '-' + side);
+        assert(Popup.vec.len(Popup.vec.cross(n0, n)) < 1e-9, nm + '-' + side + ' parallel to ' + names[0] + ' at ' + a + '°');
+      });
+    }
+  }
 });
 
 if (failures) {
